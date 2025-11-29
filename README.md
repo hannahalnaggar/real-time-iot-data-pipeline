@@ -12,7 +12,7 @@ It demonstrates key **data engineering concepts** like **ETL**, **streaming anal
 3. **Streaming Analytics**: Real-time processing with alerts on threshold breaches.
 4. **Dashboard**: Visualizes temperature/humidity trends and alerts.
 
-
+![Architecture Diagram](docs/architecture.png)
 
 ---
 
