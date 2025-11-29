@@ -1,0 +1,8 @@
+timestamp,sensor_id,temperature,humidity,alert
+2025-10-05 12:00:00,sensor_01,35.2,65,Normal
+2025-10-05 12:01:00,sensor_02,48.7,78,Normal
+2025-10-05 12:02:00,sensor_03,200,10,Normal
+2025-10-05 12:03:00,,30.5,55,Normal
+2025-10-05 12:04:00,sensor_01,39.4,105,Normal
+2025-10-05 12:05:00,sensor_02,40.1,80,Normal
+2025-10-05 12:05:00,sensor_02,40.1,80,Normal
