@@ -1,0 +1,199 @@
+"""
+Streaming & Alerting Pipeline
+
+- Simulates real-time ingestion by reading the CSV row-by-row.
+- Inserts readings into the 'readings' table.
+- Ensures devices exist in the 'sensors' table.
+- Applies alert rules:
+    * Temperature > 30°C  -> HIGH_TEMP alert
+    * Humidity < 40%      -> LOW_HUMIDITY alert
+- Writes alerts into the 'alerts' table.
+
+This script represents the work of the "Streaming & Alerting Engineer" role.
+"""
+
+import time
+from datetime import datetime
+
+import pandas as pd
+import psycopg2
+
+# ==========================
+# CONFIGURATION
+# ==========================
+
+CSV_PATH = r"C:\Users\hannah\Downloads\sensor_data_depi.csv"
+
+DB_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "dbname": "iot_db",
+    "user": "your_user",
+    "password": "your_password",
+}
+
+# Delay between each reading to simulate streaming (in seconds)
+STREAM_DELAY_SECONDS = 0.5
+
+
+# ==========================
+# DB CONNECTION
+# ==========================
+
+def get_connection():
+    conn = psycopg2.connect(
+        host=DB_CONFIG["host"],
+        port=DB_CONFIG["port"],
+        dbname=DB_CONFIG["dbname"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"],
+    )
+    conn.autocommit = True
+    return conn
+
+
+# ==========================
+# DB OPERATIONS
+# ==========================
+
+def upsert_sensor(cur, device_id):
+    """
+    Ensure the sensor exists in the sensors table.
+    If it exists, update last_seen_at.
+    """
+    cur.execute(
+        """
+        INSERT INTO sensors (device_id, device_name, device_type, installed_at, last_seen_at)
+        VALUES (%s, %s, %s, NOW(), NOW())
+        ON CONFLICT (device_id)
+        DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at;
+        """,
+        (device_id, device_id, "temperature_humidity"),
+    )
+
+
+def insert_reading(cur, row):
+    """
+    Insert a new reading into the readings table.
+    Returns (ts, temp, humid) as stored in DB.
+    """
+    cur.execute(
+        """
+        INSERT INTO readings (device_id, ts, temperature_c, humidity_pct)
+        VALUES (%s, %s, %s, %s)
+        RETURNING ts, temperature_c, humidity_pct;
+        """,
+        (
+            row["device_id"],
+            row["timestamp"].to_pydatetime(),
+            float(row["temperature"]),
+            float(row["humidity"]),
+        ),
+    )
+    return cur.fetchone()  # (ts, temperature_c, humidity_pct)
+
+
+def insert_alert(cur, device_id, ts, temp, humid, rule_name, message, severity="WARN"):
+    """
+    Insert a new alert into the alerts table.
+    """
+    cur.execute(
+        """
+        INSERT INTO alerts (device_id, ts, rule_name, severity, temperature_c, humidity_pct, message)
+        VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """,
+        (device_id, ts, rule_name, severity, temp, humid, message),
+    )
+
+
+# ==========================
+# BUSINESS LOGIC
+# ==========================
+
+def process_row(cur, row):
+    """
+    Process a single sensor reading:
+    - Upsert sensor.
+    - Insert reading.
+    - Apply alert rules.
+    """
+    device_id = row["device_id"]
+    temp = float(row["temperature"])
+    humid = float(row["humidity"])
+
+    # 1) Ensure sensor exists
+    upsert_sensor(cur, device_id)
+
+    # 2) Insert reading
+    ts, temp_db, humid_db = insert_reading(cur, row)
+
+    # 3) Alert rules
+
+    # Rule 1: High temperature
+    if temp > 30.0:
+        severity = "CRITICAL" if temp > 35.0 else "WARN"
+        insert_alert(
+            cur=cur,
+            device_id=device_id,
+            ts=ts,
+            temp=temp_db,
+            humid=humid_db,
+            rule_name="HIGH_TEMP",
+            message=f"Temperature too high: {temp_db:.1f}°C",
+            severity=severity,
+        )
+
+    # Rule 2: Low humidity
+    if humid < 40.0:
+        insert_alert(
+            cur=cur,
+            device_id=device_id,
+            ts=ts,
+            temp=temp_db,
+            humid=humid_db,
+            rule_name="LOW_HUMIDITY",
+            message=f"Humidity too low: {humid_db:.1f}%",
+            severity="WARN",
+        )
+
+
+# ==========================
+# MAIN STREAMING LOOP
+# ==========================
+
+def main():
+    # Load CSV and parse timestamps
+    df = pd.read_csv(CSV_PATH)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    # Sort by time to simulate real-time arrival in correct order
+    df = df.sort_values("timestamp")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    print("Starting streaming simulation...")
+    print(f"Total rows to process: {len(df)}")
+
+    try:
+        for i, row in df.iterrows():
+            process_row(cur, row)
+            print(
+                f"[{i + 1}/{len(df)}] Processed reading: "
+                f"device={row['device_id']}, ts={row['timestamp']}, "
+                f"temp={row['temperature']}, humidity={row['humidity']}"
+            )
+
+            # Simulate delay between incoming readings
+            time.sleep(STREAM_DELAY_SECONDS)
+
+    except KeyboardInterrupt:
+        print("Streaming interrupted by user.")
+    finally:
+        cur.close()
+        conn.close()
+        print("DB connection closed.")
+
+
+if __name__ == "__main__":
+    main()
